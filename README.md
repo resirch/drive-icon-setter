@@ -20,15 +20,6 @@ Download `drive-icon-setter.exe` from the [latest release](https://github.com/re
 
 Close File Explorer completely, then open it again (Win+E) so the new icon appears.
 
-## Remove a custom icon
-
-1. Open the app.
-2. Enter the same drive letter.
-3. Choose the same scope you used when applying the icon.
-4. Click **Remove override**.
-
-Restart File Explorer again to see the default icon.
-
 ## Command line
 
 The same options are available from a terminal:
