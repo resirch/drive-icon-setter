@@ -53,10 +53,10 @@ fn run_cli(args: Vec<String>) -> Result<(), AppError> {
                 "Registry key: {}",
                 config.scope.default_icon_key(config.drive)
             );
-            if let Some(source_png) = &prepared_icon.converted_from {
+            if let Some(source_image) = &prepared_icon.converted_from {
                 println!(
-                    "Converted PNG \"{}\" to \"{}\".",
-                    source_png.display(),
+                    "Converted image \"{}\" to \"{}\".",
+                    source_image.display(),
                     prepared_icon.path.display()
                 );
             }
@@ -209,7 +209,7 @@ impl eframe::App for DriveIconApp {
             });
 
             ui.add_space(6.0);
-            ui.label("Pick a drive, choose a .ico or .png file, then apply the registry override.");
+            ui.label("Pick a drive, choose an image file, then apply the registry override.");
             ui.add_space(12.0);
 
             egui::Grid::new("drive_icon_form")
@@ -228,13 +228,15 @@ impl eframe::App for DriveIconApp {
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.icon_path)
-                                .hint_text(r"C:\Icons\Drive.ico or Drive.png")
+                                .hint_text(
+                                    r"C:\Icons\Drive.ico, Drive.png, Drive.jpg, or Drive.webp",
+                                )
                                 .desired_width(300.0),
                         );
 
                         if ui.button("Browse...").clicked() {
                             if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("Icon or PNG files", &["ico", "png"])
+                                .add_filter("Image files", &["ico", "png", "jpg", "jpeg", "webp"])
                                 .pick_file()
                             {
                                 self.icon_path = path.display().to_string();
@@ -348,10 +350,10 @@ impl DriveIconApp {
                 self.scope.description()
             );
 
-            if let Some(source_png) = &prepared_icon.converted_from {
+            if let Some(source_image) = &prepared_icon.converted_from {
                 message.push_str(&format!(
                     " Converted \"{}\" to ICO first.",
-                    source_png.display()
+                    source_image.display()
                 ));
             }
 
@@ -459,8 +461,11 @@ impl Config {
 
             Action::Remove
         } else {
-            let icon_path = icon_path
-                .ok_or_else(|| AppError::Usage("missing .ico or .png file path".into()))?;
+            let icon_path = icon_path.ok_or_else(|| {
+                AppError::Usage(
+                    "missing image file path (.ico, .png, .jpg, .jpeg, or .webp)".into(),
+                )
+            })?;
             Action::Set { icon_path }
         };
 
@@ -515,8 +520,8 @@ fn prepare_icon_path(path: &Path) -> Result<PreparedIcon, AppError> {
         });
     }
 
-    if has_extension(&image_path, "png") {
-        let icon_path = convert_png_to_ico(&image_path)?;
+    if is_convertible_image(&image_path) {
+        let icon_path = convert_image_to_ico(&image_path)?;
 
         return Ok(PreparedIcon {
             path: icon_path,
@@ -525,8 +530,15 @@ fn prepare_icon_path(path: &Path) -> Result<PreparedIcon, AppError> {
     }
 
     Err(AppError::Usage(
-        "Choose a .ico file, or a .png file that can be converted to .ico.".into(),
+        "Choose a .ico file, or a .png, .jpg, .jpeg, or .webp file that can be converted to .ico."
+            .into(),
     ))
+}
+
+fn is_convertible_image(path: &Path) -> bool {
+    ["png", "jpg", "jpeg", "webp"]
+        .iter()
+        .any(|extension| has_extension(path, extension))
 }
 
 fn has_extension(path: &Path, extension: &str) -> bool {
@@ -535,11 +547,11 @@ fn has_extension(path: &Path, extension: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case(extension))
 }
 
-fn convert_png_to_ico(png_path: &Path) -> Result<PathBuf, AppError> {
-    let source_image = image::open(png_path)?;
+fn convert_image_to_ico(image_path: &Path) -> Result<PathBuf, AppError> {
+    let source_image = image::open(image_path)?;
     let icon_image = normalize_icon_image(source_image);
 
-    let mut icon_path = png_path.to_path_buf();
+    let mut icon_path = image_path.to_path_buf();
     icon_path.set_extension("ico");
 
     let mut icon_file = File::create(&icon_path).map_err(|error| {
@@ -601,17 +613,19 @@ fn remove_drive_icon(drive: char, scope: Scope) -> Result<(), AppError> {
 fn print_usage() {
     println!(
         "Usage:
-  drive-icon-setter <drive-letter> <icon.ico|image.png> [--scope user|machine]
+  drive-icon-setter <drive-letter> <image-file> [--scope user|machine]
   drive-icon-setter <drive-letter> --remove [--scope user|machine]
 
 Examples:
   drive-icon-setter F C:\\Icons\\Backup.ico
   drive-icon-setter F C:\\Icons\\Backup.png
+  drive-icon-setter F C:\\Icons\\Backup.jpg
+  drive-icon-setter F C:\\Icons\\Backup.webp
   drive-icon-setter F C:\\Windows\\Backup.ico --scope machine
   drive-icon-setter F --remove
 
 Notes:
-  png files are converted to sibling .ico files before the registry is updated.
+  png, jpg, jpeg, and webp files are converted to sibling .ico files before the registry is updated.
   user scope writes HKCU and affects only the current account.
   machine scope writes HKLM, affects all users, and requires elevation."
     );
@@ -695,25 +709,37 @@ mod tests {
     }
 
     #[test]
-    fn converts_png_to_sibling_ico() {
+    fn converts_raster_images_to_sibling_ico() {
         let test_dir = env::temp_dir().join(format!("drive-icon-setter-test-{}", process::id()));
         let _ = fs::remove_dir_all(&test_dir);
         fs::create_dir_all(&test_dir).unwrap();
 
-        let png_path = test_dir.join("drive.png");
-        let png_image = RgbaImage::from_pixel(48, 32, Rgba([24, 128, 72, 255]));
-        png_image
-            .save_with_format(&png_path, ImageFormat::Png)
-            .unwrap();
+        let rgba_image = RgbaImage::from_pixel(48, 32, Rgba([24, 128, 72, 255]));
+        let formats = [
+            ("drive.png", ImageFormat::Png),
+            ("drive.jpg", ImageFormat::Jpeg),
+            ("drive.webp", ImageFormat::WebP),
+        ];
 
-        let prepared_icon = prepare_icon_path(&png_path).unwrap();
+        for (file_name, format) in formats {
+            let image_path = test_dir.join(file_name);
+            match format {
+                ImageFormat::Jpeg => DynamicImage::ImageRgba8(rgba_image.clone())
+                    .to_rgb8()
+                    .save_with_format(&image_path, format)
+                    .unwrap(),
+                _ => rgba_image.save_with_format(&image_path, format).unwrap(),
+            }
 
-        assert_eq!(
-            prepared_icon.converted_from,
-            Some(png_path.canonicalize().unwrap())
-        );
-        assert!(has_extension(&prepared_icon.path, "ico"));
-        assert!(prepared_icon.path.exists());
+            let prepared_icon = prepare_icon_path(&image_path).unwrap();
+
+            assert_eq!(
+                prepared_icon.converted_from,
+                Some(image_path.canonicalize().unwrap())
+            );
+            assert!(has_extension(&prepared_icon.path, "ico"));
+            assert!(prepared_icon.path.exists());
+        }
 
         let _ = fs::remove_dir_all(&test_dir);
     }
